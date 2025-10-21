@@ -35,8 +35,14 @@ export interface UseFormPersistenceReturn<T> {
   getFormDataJson: () => string; // 获取表单数据的JSON字符串
   getFileDataJson: () => string; // 获取文件数据的JSON字符串
 }
+// 错误级别枚举
+export type ErrorLevel = 'none' | 'basic' | 'detailed';
+
 // 表单持久化选项接口
 export interface UseFormPersistenceOptions {
   fileFields: string[]; // 由组件传入的文件字段列表
   clearOnClose?: boolean; // 是否在页面关闭时清除数据
+  dataExpiryMs?: number; // 数据过期时间（毫秒），默认24小时
+  errorLevel?: ErrorLevel; // 错误报告级别
+  onError?: (error: Error, context: string) => void; // 错误回调函数
 }

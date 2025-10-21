@@ -103,6 +103,7 @@
       </div>
 
       <button type="submit" class="submit-btn">提交表单</button>
+  <button type="button" @click="handleClearStorage" class="clear-btn">清除缓存数据</button>
     </form>
   </div>
 </template>
@@ -122,6 +123,13 @@ const fileFields = ["avatar", "attachments", "folder"]; // 组件自己的文件
 // 自动日志回调 - 在组件中完全控制日志内容和格式
 // 移除日志回调函数
 
+// 错误处理回调
+const handleFormError = (error: Error, context: string) => {
+  console.error(`表单错误 [${context}]:`, error);
+  // 这里可以根据需要展示自定义错误提示
+  // 例如：使用更友好的UI组件显示错误
+};
+
 // 初始化表单（指定类型）
 const { formData, fileData, hasUnsavedChanges, uploadProgress, error, saveFiles, clearStorage, clearError, getFormDataJson, getFileDataJson } = useFormPersistence<FormData>(
   "example_form",
@@ -132,7 +140,10 @@ const { formData, fileData, hasUnsavedChanges, uploadProgress, error, saveFiles,
   },
   {
     fileFields,
-    clearOnClose: true // 启用页面关闭时清除数据
+    clearOnClose: true, // 启用页面关闭时清除数据
+    dataExpiryMs: 8 * 60 * 60 * 1000, // 自定义过期时间为8小时
+    errorLevel: 'detailed', // 详细错误报告
+    onError: handleFormError // 自定义错误处理回调
   }
 );
 
@@ -141,10 +152,10 @@ const handleFileChange = async (fieldName: string, files: FileList | null) => {
   if (files && files.length > 0) {
     try {
       await saveFiles(fieldName, Array.from(files));
-      // 可以在这里添加成功提示
+      // 文件保存成功，错误会通过error响应式引用自动处理
     } catch (err) {
-      console.error(`文件保存失败:`, err);
-      // 错误信息会通过error响应式引用显示
+      // 这里可以添加额外的业务逻辑处理
+      // 注意：错误已经在useFormPersistence中通过onError回调处理了
     }
   }
 };
@@ -190,6 +201,19 @@ const handleSubmit = () => {
 
   // 模拟提交
   alert('表单提交成功！\n\n表单数据JSON已获取，可用于后续处理。');
+};
+
+// 清除缓存数据
+const handleClearStorage = async () => {
+  if (confirm('确定要清除所有缓存数据吗？此操作不可恢复。')) {
+    try {
+      await clearStorage();
+      alert('缓存数据已成功清除！');
+    } catch (err) {
+      console.error('清除缓存失败:', err);
+      alert('清除缓存失败，请稍后重试。');
+    }
+  }
 };
 
 // 组件卸载时释放Blob URL

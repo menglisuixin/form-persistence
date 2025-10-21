@@ -3,6 +3,7 @@ import type {
   UseFormPersistenceReturn,
   UseFormPersistenceOptions,
   UploadProgress,
+  ErrorLevel,
 } from "../types/useFormPersistenceType";
 import {
   ref,
@@ -13,41 +14,81 @@ import {
   type Reactive,
 } from "vue";
 
+// 默认配置常量
+const DEFAULT_DATA_EXPIRY_MS = 24 * 60 * 60 * 1000; // 默认24小时过期
+const DEFAULT_ERROR_LEVEL: ErrorLevel = 'basic'; // 默认基本错误级别
+
 // 存储常量
 const STORAGE_PREFIX = "form_persistence_";
 const DB_NAME = "FormPersistenceDB";
 const DB_VERSION = 1;
 const DB_STORE_NAME = "form_files";
 
-// 使用原始选项类型
-type EnhancedOptions = UseFormPersistenceOptions;
+// 错误处理函数
+const handleError = (
+  error: Error,
+  context: string,
+  errorLevel: ErrorLevel,
+  onError?: (error: Error, context: string) => void
+): string => {
+  const errorMessage = `${context}: ${error.message}`;
+
+  // 根据错误级别处理
+  if (errorLevel === 'detailed') {
+    console.error(errorMessage, error);
+  } else if (errorLevel === 'basic') {
+    console.warn(errorMessage);
+  }
+
+  // 调用用户提供的错误回调
+  if (onError) {
+    onError(error, context);
+  }
+
+  return errorMessage;
+};
 
 // IndexedDB工具类（带类型约束）
 class FileStorage {
   private db: IDBDatabase | null = null;
+  private isInitialized = false;
 
   async init(): Promise<void> {
+    if (this.isInitialized) {
+      return; // 避免重复初始化
+    }
+
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      try {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-      request.onupgradeneeded = (e: IDBVersionChangeEvent) => {
-        const db = (e.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(DB_STORE_NAME)) {
-          db.createObjectStore(DB_STORE_NAME, {
-            keyPath: "fileId",
-            autoIncrement: true,
-          });
-        }
-      };
+        request.onupgradeneeded = (e: IDBVersionChangeEvent) => {
+          try {
+            const db = (e.target as IDBOpenDBRequest).result;
+            if (!db.objectStoreNames.contains(DB_STORE_NAME)) {
+              db.createObjectStore(DB_STORE_NAME, {
+                keyPath: "fileId",
+                autoIncrement: true,
+              });
+            }
+          } catch (error) {
+            reject(new Error(`数据库升级失败: ${error instanceof Error ? error.message : String(error)}`));
+          }
+        };
 
-      request.onsuccess = (e: Event) => {
-        this.db = (e.target as IDBOpenDBRequest).result;
-        resolve();
-      };
+        request.onsuccess = (e: Event) => {
+          this.db = (e.target as IDBOpenDBRequest).result;
+          this.isInitialized = true;
+          resolve();
+        };
 
-      request.onerror = (e: Event) => {
-        reject((e.target as IDBOpenDBRequest).error);
-      };
+        request.onerror = (e: Event) => {
+          const dbError = (e.target as IDBOpenDBRequest).error;
+          reject(new Error(`数据库初始化失败: ${dbError?.message || '未知错误'}`));
+        };
+      } catch (error) {
+        reject(new Error(`IndexedDB操作失败: ${error instanceof Error ? error.message : String(error)}`));
+      }
     });
   }
 
@@ -188,9 +229,16 @@ const fileStorage = new FileStorage();
 export function useFormPersistence<T extends object>(
   formId: string,
   initialFormData: T,
-  options: EnhancedOptions
+  options: UseFormPersistenceOptions
 ): UseFormPersistenceReturn<T> {
-  const { fileFields, clearOnClose = false } = options;
+  // 合并默认选项
+  const {
+    fileFields,
+    clearOnClose = false,
+    dataExpiryMs = DEFAULT_DATA_EXPIRY_MS,
+    errorLevel = DEFAULT_ERROR_LEVEL,
+    onError
+  } = options;
 
   // 添加获取表单数据JSON的方法
   const getFormDataJson = (): string => {
@@ -244,85 +292,126 @@ export function useFormPersistence<T extends object>(
   // 正常关闭标记键名
   const normalCloseKey = `${STORAGE_PREFIX}${formId}_normal_close`;
 
+  // 检查数据是否过期
+  const isDataExpired = (savedAt?: string): boolean => {
+    if (!savedAt) return false;
+
+    const savedTime = new Date(savedAt).getTime();
+    const now = new Date().getTime();
+
+    return now - savedTime > dataExpiryMs;
+  };
+
+  // 从sessionStorage恢复数据
+  const restoreFromSessionStorage = (): { formOnly: Partial<T>, success: boolean } => {
+    try {
+      const savedText = sessionStorage.getItem(sessionKey);
+      if (!savedText) {
+        return { formOnly: {}, success: false };
+      }
+
+      const parsed = JSON.parse(savedText) as Partial<T> & { savedAt?: string };
+
+      // 检查数据是否过期
+      if (isDataExpired(parsed.savedAt)) {
+        sessionStorage.removeItem(sessionKey);
+        return { formOnly: {}, success: false };
+      }
+
+      // 移除savedAt字段，只恢复表单数据
+      const formDataWithoutTimestamp = { ...parsed };
+      delete formDataWithoutTimestamp.savedAt;
+      return { formOnly: formDataWithoutTimestamp as Partial<T>, success: true };
+    } catch (error) {
+      handleError(
+        error instanceof Error ? error : new Error(String(error)),
+        "从sessionStorage恢复数据",
+        errorLevel,
+        onError
+      );
+      return { formOnly: {}, success: false };
+    }
+  };
+
+  // 从localStorage恢复数据（崩溃恢复）
+  const restoreFromLocalStorage = (): { formOnly: Partial<T>, success: boolean } => {
+    try {
+      const localStorageText = localStorage.getItem(storageKey);
+      if (!localStorageText) {
+        return { formOnly: {}, success: false };
+      }
+
+      const parsed = JSON.parse(localStorageText) as Partial<T> & { savedAt?: string };
+
+      // 检查数据是否过期
+      if (isDataExpired(parsed.savedAt)) {
+        localStorage.removeItem(storageKey);
+        return { formOnly: {}, success: false };
+      }
+
+      // 移除savedAt字段，只恢复表单数据
+      const formDataWithoutTimestamp = { ...parsed };
+      delete formDataWithoutTimestamp.savedAt;
+
+      // 将恢复的数据同步到sessionStorage
+      sessionStorage.setItem(sessionKey, localStorageText);
+
+      return { formOnly: formDataWithoutTimestamp as Partial<T>, success: true };
+    } catch (error) {
+      handleError(
+        error instanceof Error ? error : new Error(String(error)),
+        "从localStorage恢复数据",
+        errorLevel,
+        onError
+      );
+      return { formOnly: {}, success: false };
+    }
+  };
+
+  // 恢复文件数据
+  const restoreFileData = async (shouldRestore: boolean): Promise<void> => {
+    if (!shouldRestore) return;
+
+    try {
+      for (const field of fileFields) {
+        fileData[field] = await fileStorage.getFiles(formId, field);
+      }
+    } catch (error) {
+      handleError(
+        error instanceof Error ? error : new Error(String(error)),
+        "恢复文件数据",
+        errorLevel,
+        onError
+      );
+    }
+  };
+
   // 恢复数据 - 智能恢复机制，支持崩溃恢复
   const restoreData = async (): Promise<void> => {
     try {
       // 检查sessionKey是否存在（判断是刷新还是重新打开）
       const sessionExists = sessionStorage.getItem(sessionKey) !== null;
-
       // 检查是否有正常关闭标记
       const isNormalClose = localStorage.getItem(normalCloseKey) === 'true';
-
-      // 检查是否是崩溃恢复场景：session不存在但localStorage有数据且没有正常关闭标记
+      // 检查是否是崩溃恢复场景
       const isCrashRecovery = !sessionExists &&
                              localStorage.getItem(storageKey) !== null &&
                              !isNormalClose;
 
       let formOnly: Partial<T> = {};
-      let savedText = sessionStorage.getItem(sessionKey);
       let isFromLocalStorage = false;
 
       // 优先从sessionStorage恢复
-      if (savedText) {
-        // 从sessionStorage恢复
-        const parsed = JSON.parse(savedText) as Partial<T> & {
-          savedAt?: string;
-        };
-
-        // 检查数据是否过期（24小时）
-        if (parsed.savedAt) {
-          const savedTime = new Date(parsed.savedAt).getTime();
-          const now = new Date().getTime();
-          const HOUR_24 = 24 * 60 * 60 * 1000;
-
-          if (now - savedTime > HOUR_24) {
-            sessionStorage.removeItem(sessionKey);
-            savedText = null; // 标记需要尝试从localStorage恢复
-          } else {
-            // 移除savedAt字段，只恢复表单数据
-            const formDataWithoutTimestamp = { ...parsed };
-            delete formDataWithoutTimestamp.savedAt;
-            formOnly = formDataWithoutTimestamp as Partial<T>;
-          }
-        } else {
-          // 移除可能存在的savedAt字段
-          const formDataWithoutTimestamp = { ...parsed };
-          delete formDataWithoutTimestamp.savedAt;
-          formOnly = formDataWithoutTimestamp as Partial<T>;
-        }
+      const sessionResult = restoreFromSessionStorage();
+      if (sessionResult.success) {
+        formOnly = sessionResult.formOnly;
       }
-
       // 如果sessionStorage恢复失败且是崩溃恢复场景，尝试从localStorage恢复
-      if (!savedText && isCrashRecovery) {
-        const localStorageText = localStorage.getItem(storageKey);
-        if (localStorageText) {
-          try {
-            const parsed = JSON.parse(localStorageText) as Partial<T> & {
-              savedAt?: string;
-            };
-
-            // 检查数据是否过期（24小时）
-            if (parsed.savedAt) {
-              const savedTime = new Date(parsed.savedAt).getTime();
-              const now = new Date().getTime();
-              const HOUR_24 = 24 * 60 * 60 * 1000;
-
-              if (now - savedTime > HOUR_24) {
-              localStorage.removeItem(storageKey);
-            } else {
-              // 移除savedAt字段，只恢复表单数据
-              const formDataWithoutTimestamp = { ...parsed };
-              delete formDataWithoutTimestamp.savedAt;
-              formOnly = formDataWithoutTimestamp as Partial<T>;
-              isFromLocalStorage = true;
-
-                // 将恢复的数据同步到sessionStorage，保持现有逻辑
-                sessionStorage.setItem(sessionKey, localStorageText);
-              }
-            }
-          } catch (parseError) {
-            // 静默处理解析错误
-          }
+      else if (isCrashRecovery) {
+        const localStorageResult = restoreFromLocalStorage();
+        if (localStorageResult.success) {
+          formOnly = localStorageResult.formOnly;
+          isFromLocalStorage = true;
         }
       }
 
@@ -331,24 +420,15 @@ export function useFormPersistence<T extends object>(
         Object.assign(formData, formOnly);
       }
 
-      // 动态恢复所有传入的文件字段
-      try {
-        // 关键逻辑：如果sessionKey存在（刷新操作）或从localStorage恢复（崩溃恢复），才从IndexedDB恢复文件
-        if (sessionExists || isFromLocalStorage) {
-          for (const field of fileFields) {
-            fileData[field] = await fileStorage.getFiles(formId, field);
-          }
-        } else if (!isNormalClose && localStorage.getItem(storageKey) !== null) {
-          // 即使不是从localStorage恢复文本数据，也尝试恢复文件（可能是部分恢复情况）
-          for (const field of fileFields) {
-            fileData[field] = await fileStorage.getFiles(formId, field);
-          }
-        }
-      } catch (fileError) {
-        // 静默处理文件恢复错误，不阻止文本数据恢复
-      }
+      // 恢复文件数据的条件
+      const shouldRestoreFiles =
+        sessionExists ||
+        isFromLocalStorage ||
+        (!isNormalClose && localStorage.getItem(storageKey) !== null);
 
-      // 检查是否有实际数据被恢复，正确更新响应式状态
+      await restoreFileData(shouldRestoreFiles);
+
+      // 检查是否有实际数据被恢复，更新响应式状态
       const hasData = Object.values(formData).some(
         (val) => val !== null && val !== undefined && val !== ""
       );
@@ -358,7 +438,13 @@ export function useFormPersistence<T extends object>(
       hasUnsavedChanges.value = hasData || hasFiles;
       error.value = null;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      const errorMessage = handleError(
+        err instanceof Error ? err : new Error(String(err)),
+        "恢复数据",
+        errorLevel,
+        onError
+      );
+      error.value = errorMessage;
       hasUnsavedChanges.value = false;
     }
   };
@@ -375,13 +461,82 @@ export function useFormPersistence<T extends object>(
         ...formData,
         savedAt: new Date().toISOString(),
       };
-      localStorage.setItem(storageKey, JSON.stringify(dataWithTimestamp));
-      sessionStorage.setItem(sessionKey, JSON.stringify(dataWithTimestamp));
+      const dataString = JSON.stringify(dataWithTimestamp);
+      
+      // 先保存到sessionStorage，再保存到localStorage
+      sessionStorage.setItem(sessionKey, dataString);
+      localStorage.setItem(storageKey, dataString);
+      
       hasUnsavedChanges.value = true;
       error.value = null;
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      const errorMessage = handleError(
+        err instanceof Error ? err : new Error(String(err)),
+        "保存文本数据",
+        errorLevel,
+        onError
+      );
+      error.value = errorMessage;
     }
+  };
+
+  // 删除指定字段的旧文件
+  const deleteOldFiles = async (fieldName: string): Promise<void> => {
+    try {
+      const oldFiles = await fileStorage.getFiles(formId, fieldName);
+      if (oldFiles.length === 0) return;
+
+      const transaction = fileStorage.getTransaction("readwrite");
+      const store = transaction.objectStore(DB_STORE_NAME);
+      
+      const deletePromises = oldFiles.map(oldFile => 
+        new Promise<void>((resolve, reject) => {
+          const request = store.delete(oldFile.fileId);
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(new Error(`删除文件失败: ${oldFile.fileId}`));
+        })
+      );
+      
+      await Promise.all(deletePromises);
+    } catch (error) {
+      throw new Error(`删除旧文件失败: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+
+  // 保存单个文件
+  const saveSingleFile = async (
+    file: File,
+    fieldName: string,
+    totalSize: number,
+    loadedSize: number
+  ): Promise<StoredFile> => {
+    const fileId = await fileStorage.saveFile(
+      file,
+      formId,
+      fieldName,
+      (loaded) => {
+        // 简化的进度计算逻辑
+        const currentLoaded = loadedSize + loaded;
+        const percent = Math.round((currentLoaded / totalSize) * 100);
+
+        uploadProgress.value = {
+          fieldName,
+          total: totalSize,
+          loaded: currentLoaded,
+          percent
+        };
+      }
+    );
+
+    // 获取已保存的文件信息
+    const savedFiles = await fileStorage.getFiles(formId, fieldName);
+    const savedFile = savedFiles.find((f) => f.fileId === fileId);
+    
+    if (!savedFile) {
+      throw new Error(`无法找到刚保存的文件: ${fileId}`);
+    }
+    
+    return savedFile;
   };
 
   // 保存文件
@@ -390,20 +545,13 @@ export function useFormPersistence<T extends object>(
       error.value = null;
       uploadProgress.value = null;
 
-      // 只删除当前字段的旧文件（使用公共方法获取事务）
-      const oldFiles = await fileStorage.getFiles(formId, fieldName);
-      if (oldFiles.length > 0) {
-        // 通过 getTransaction 方法获取事务，避免直接访问 db
-        const transaction = fileStorage.getTransaction("readwrite");
-        const store = transaction.objectStore(DB_STORE_NAME);
-        for (const oldFile of oldFiles) {
-          await new Promise((resolve, reject) => {
-            const request = store.delete(oldFile.fileId);
-            request.onsuccess = resolve;
-            request.onerror = reject;
-          });
-        }
+      // 参数验证
+      if (!fieldName || !files || files.length === 0) {
+        throw new Error("无效的文件保存参数");
       }
+
+      // 先删除旧文件
+      await deleteOldFiles(fieldName);
 
       // 保存新文件，添加进度跟踪
       const newFiles: StoredFile[] = [];
@@ -411,45 +559,22 @@ export function useFormPersistence<T extends object>(
       let loadedSize = 0;
 
       for (const file of files) {
-
-        const fileId = await fileStorage.saveFile(
-          file,
-          formId,
-          fieldName,
-          (loaded, _total) => {
-            // 更新上传进度
-            // 使用_total作为占位符，表示我们知道这个参数但当前不需要使用它
-            // 上传进度计算 - 修正逻辑
-            const fileProgressLoaded = loaded;
-            // 计算当前文件进度对总进度的贡献
-            const percent = Math.round(
-              ((loadedSize + fileProgressLoaded) / totalSize) * 100
-            );
-
-            uploadProgress.value = {
-              fieldName,
-              total: totalSize,
-              loaded: loadedSize,
-              percent,
-            };
-
-            // 进度信息不再记录为日志
-          }
-        );
-
-        const savedFiles = await fileStorage.getFiles(formId, fieldName);
-        const savedFile = savedFiles.find((f) => f.fileId === fileId);
-        if (savedFile) {
-          newFiles.push(savedFile);
-          loadedSize += file.size;
-        }
+        const savedFile = await saveSingleFile(file, fieldName, totalSize, loadedSize);
+        newFiles.push(savedFile);
+        loadedSize += file.size;
       }
 
       fileData[fieldName] = newFiles;
       hasUnsavedChanges.value = true;
       uploadProgress.value = null; // 上传完成，清除进度
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      const errorMessage = handleError(
+        err instanceof Error ? err : new Error(String(err)),
+        "保存文件",
+        errorLevel,
+        onError
+      );
+      error.value = errorMessage;
       uploadProgress.value = null;
       throw err; // 重新抛出错误以便调用方可以捕获
     }
@@ -485,51 +610,41 @@ export function useFormPersistence<T extends object>(
     try {
       // 清除sessionStorage数据
       sessionStorage.removeItem(sessionKey);
-      // 详细步骤不再单独记录
-
+      
       // 清除localStorage数据
       localStorage.removeItem(storageKey);
-      // 清除正常关闭标记
       localStorage.removeItem(normalCloseKey);
-      // 详细步骤不再单独记录
-
+      
       // 清除IndexedDB数据
       await fileStorage.clearFiles(formId);
-      // 详细步骤不再单独记录
-
+      
+      // 重置状态
       hasUnsavedChanges.value = false;
       error.value = null;
-
+      
       // 清空文件数据
       for (const field of fileFields) {
         fileData[field] = [];
       }
 
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err);
+      const errorMessage = handleError(
+        err instanceof Error ? err : new Error(String(err)),
+        "清理存储",
+        errorLevel,
+        onError
+      );
+      error.value = errorMessage;
     }
   };
 
   // 监听表单数据变化
   watch(formData, () => saveTextData(), { deep: true });
 
-  // 生命周期
-  onMounted(async () => {
-    // 初始化fileStorage
-    await fileStorage.init();
-
-    // 检查sessionKey是否存在（判断是刷新还是重新打开）
-    const sessionExists = sessionStorage.getItem(sessionKey) !== null;
-
-    // 检查是否有正常关闭标记
-    const isNormalClose = localStorage.getItem(normalCloseKey) === 'true';
-
-    // 智能清理逻辑：
-    // 1. 如果是正常关闭后重新打开且clearOnClose=true，清理所有数据
-    // 2. 崩溃恢复场景不清理数据
-    if (!sessionExists && isNormalClose && clearOnClose) {
-        try {
-
+  // 清理正常关闭数据
+  const cleanNormalCloseData = async (): Promise<void> => {
+    if (clearOnClose) {
+      try {
         // 清除所有存储
         sessionStorage.removeItem(sessionKey);
         localStorage.removeItem(storageKey);
@@ -543,17 +658,51 @@ export function useFormPersistence<T extends object>(
           fileData[field] = [];
         }
       } catch (err) {
-          // 静默处理清理错误
-        }
+        handleError(
+          err instanceof Error ? err : new Error(String(err)),
+          "清理正常关闭数据",
+          errorLevel,
+          onError
+        );
+      }
+    }
+  };
+
+  // 生命周期
+  onMounted(async () => {
+    try {
+      // 初始化fileStorage
+      await fileStorage.init();
+
+      // 检查sessionKey是否存在（判断是刷新还是重新打开）
+      const sessionExists = sessionStorage.getItem(sessionKey) !== null;
+
+      // 检查是否有正常关闭标记
+      const isNormalClose = localStorage.getItem(normalCloseKey) === 'true';
+
+      // 智能清理逻辑：
+      // 1. 如果是正常关闭后重新打开且clearOnClose=true，清理所有数据
+      // 2. 崩溃恢复场景不清理数据
+      if (!sessionExists && isNormalClose) {
+        await cleanNormalCloseData();
       }
 
-    // 恢复数据（包括文件）
-    await restoreData();
+      // 恢复数据（包括文件）
+      await restoreData();
 
-    // 添加事件监听
-    document.addEventListener("visibilitychange", handlePageClose);
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    window.addEventListener("pagehide", handlePageClose);
+      // 添加事件监听
+      document.addEventListener("visibilitychange", handlePageClose);
+      window.addEventListener("beforeunload", handleBeforeUnload);
+      window.addEventListener("pagehide", handlePageClose);
+    } catch (err) {
+      const errorMessage = handleError(
+        err instanceof Error ? err : new Error(String(err)),
+        "初始化表单持久化",
+        errorLevel,
+        onError
+      );
+      error.value = errorMessage;
+    }
   });
 
   onUnmounted(() => {
