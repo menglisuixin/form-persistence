@@ -1,7 +1,7 @@
 {
   "name": "@menglisuixin/form-persistence",
   "private": false,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "表单数据持久化库，支持正常/异常退出检测和文件上传进度监控",
   "keywords": [
