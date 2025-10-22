@@ -1,13 +1,16 @@
 <template>
+  <h1>Form Persistence</h1>
+  <p>表单数据持久化库，支持检测正常退出和异常退出，提供数据恢复功能。</p>
+  <p>
+    <strong>注意：</strong>这是一个库项目，不是一个独立的应用程序。请按照
+    README.md 中的说明使用。
+  </p>
   <div class="form-container">
-    <h2>TypeScript表单持久化示例</h2>
-
     <!-- 错误提示 -->
     <div v-if="error" class="error-message">
       <span>{{ error }}</span>
       <button type="button" @click="clearError" class="error-close">×</button>
     </div>
-
     <!-- 上传进度条 -->
     <div v-if="uploadProgress" class="progress-container">
       <div class="progress-info">
@@ -54,48 +57,52 @@
       <!-- 单文件上传 -->
       <div class="form-group">
         <label>头像（单文件）：</label>
-        <input
-          type="file"
-          accept="image/*"
-          @change="
-            handleFileChange(
-              'avatar',
-              ($event.target as HTMLInputElement).files
-            )
-          "
-        />
-        <div class="preview" v-if="fileData.avatar && fileData.avatar.length">
-          <img
-            :src="fileData.avatar[0] ? getBlobUrl(fileData.avatar[0]) : ''"
-            alt="头像预览"
-            class="avatar-preview"
+        <div class="file-upload-container">
+          <input
+            type="file"
+            accept="image/*"
+            @change="
+              handleFileChange(
+                'avatar',
+                ($event.target as HTMLInputElement).files
+              )
+            "
           />
+          <div class="preview" v-if="fileData.avatar && fileData.avatar.length">
+            <img
+              :src="fileData.avatar[0] ? getBlobUrl(fileData.avatar[0]) : ''"
+              alt="头像预览"
+              class="avatar-preview"
+            />
+          </div>
         </div>
       </div>
 
       <!-- 多文件上传 -->
       <div class="form-group">
         <label>附件（多文件）：</label>
-        <input
-          type="file"
-          multiple
-          @change="
-            handleFileChange(
-              'attachments',
-              ($event.target as HTMLInputElement).files
-            )
-          "
-        />
-        <div
-          class="file-list"
-          v-if="fileData.attachments && fileData.attachments.length"
-        >
+        <div class="file-upload-container">
+          <input
+            type="file"
+            multiple
+            @change="
+              handleFileChange(
+                'attachments',
+                ($event.target as HTMLInputElement).files
+              )
+            "
+          />
           <div
-            v-for="file in fileData.attachments"
-            :key="file.fileId"
-            class="file-item"
+            class="file-list"
+            v-if="fileData.attachments && fileData.attachments.length"
           >
-            {{ file.fileName }} ({{ formatSize(file.fileSize) }})
+            <div
+              v-for="file in fileData.attachments"
+              :key="file.fileId"
+              class="file-item"
+            >
+              {{ file.fileName }} ({{ formatSize(file.fileSize) }})
+            </div>
           </div>
         </div>
       </div>
@@ -103,32 +110,37 @@
       <!-- 文件夹上传 -->
       <div class="form-group">
         <label>文件夹：</label>
-        <input
-          type="file"
-          webkitdirectory
-          directory
-          @change="
-            handleFileChange(
-              'folder',
-              ($event.target as HTMLInputElement).files
-            )
-          "
-        />
-        <div class="file-list" v-if="fileData.folder && fileData.folder.length">
+        <div class="file-upload-container">
+          <input
+            type="file"
+            webkitdirectory
+            directory
+            @change="
+              handleFileChange(
+                'folder',
+                ($event.target as HTMLInputElement).files
+              )
+            "
+          />
           <div
-            v-for="file in fileData.folder"
-            :key="file.fileId"
-            class="file-item"
+            class="file-list"
+            v-if="fileData.folder && fileData.folder.length"
           >
-            📂 {{ file.fileName }}
+            <div
+              v-for="file in fileData.folder"
+              :key="file.fileId"
+              class="file-item"
+            >
+              📂 {{ file.fileName }}
+            </div>
           </div>
         </div>
       </div>
 
       <button type="submit" class="submit-btn">提交表单</button>
-      <button type="button" @click="handleClearStorage" class="clear-btn">
+      <!-- <button type="button" @click="handleClearStorage" class="clear-btn">
         清除缓存数据
-      </button>
+      </button> -->
     </form>
   </div>
 </template>
@@ -162,7 +174,7 @@ const {
   uploadProgress,
   error,
   saveFiles,
-  clearStorage,
+  // clearStorage,
   clearError,
   getFormDataJson,
   getFileDataJson,
@@ -239,17 +251,17 @@ const handleSubmit = () => {
 };
 
 // 清除缓存数据
-const handleClearStorage = async () => {
-  if (confirm("确定要清除所有缓存数据吗？此操作不可恢复。")) {
-    try {
-      await clearStorage();
-      alert("缓存数据已成功清除！");
-    } catch (err) {
-      console.error("清除缓存失败:", err);
-      alert("清除缓存失败，请稍后重试。");
-    }
-  }
-};
+// const handleClearStorage = async () => {
+//   if (confirm("确定要清除所有缓存数据吗？此操作不可恢复。")) {
+//     try {
+//       await clearStorage();
+//       alert("缓存数据已成功清除！");
+//     } catch (err) {
+//       console.error("清除缓存失败:", err);
+//       alert("清除缓存失败，请稍后重试。");
+//     }
+//   }
+// };
 
 // 组件卸载时释放Blob URL
 onUnmounted(() => {
@@ -269,9 +281,11 @@ onUnmounted(() => {
 
 .form-group {
   margin-bottom: 15px;
+  display: flex;
 }
 
 label {
+  width: 200px;
   display: block;
   margin-bottom: 5px;
   font-weight: 500;
@@ -280,22 +294,23 @@ label {
 input,
 textarea {
   width: 100%;
-  padding: 8px;
+  padding: 8px 0 8px 8px;
   border: 1px solid #ddd;
   border-radius: 4px;
 }
 
 textarea {
-  min-height: 100px;
-  resize: vertical;
+  height: 100px;
+  resize: none;
 }
 
 .preview {
+  width: 100%;
   margin-top: 10px;
 }
 
 .avatar-preview {
-  width: 150px;
+  width: 200px;
   height: 150px;
   object-fit: cover;
   border-radius: 4px;
@@ -383,5 +398,8 @@ textarea {
   height: 100%;
   background-color: #42b983;
   transition: width 0.3s ease;
+}
+.file-upload-container {
+  width: 100%;
 }
 </style>
