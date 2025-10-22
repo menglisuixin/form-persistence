@@ -294,7 +294,6 @@ label {
 input,
 textarea {
   width: 100%;
-  padding: 8px 0 8px 8px;
   border: 1px solid #ddd;
   border-radius: 4px;
 }
