@@ -4,6 +4,8 @@ import type {
   UseFormPersistenceOptions,
   UploadProgress,
   ErrorLevel,
+  DataTransformMiddleware,
+  FieldTransformConfig,
 } from "../types/useFormPersistenceType";
 import {
   ref,
@@ -16,7 +18,7 @@ import {
 
 // 默认配置常量
 const DEFAULT_DATA_EXPIRY_MS = 24 * 60 * 60 * 1000; // 默认24小时过期
-const DEFAULT_ERROR_LEVEL: ErrorLevel = 'basic'; // 默认基本错误级别
+const DEFAULT_ERROR_LEVEL: ErrorLevel = "basic"; // 默认基本错误级别
 
 // 存储常量
 const STORAGE_PREFIX = "form_persistence_";
@@ -34,9 +36,9 @@ const handleError = (
   const errorMessage = `${context}: ${error.message}`;
 
   // 根据错误级别处理
-  if (errorLevel === 'detailed') {
+  if (errorLevel === "detailed") {
     console.error(errorMessage, error);
-  } else if (errorLevel === 'basic') {
+  } else if (errorLevel === "basic") {
     console.warn(errorMessage);
   }
 
@@ -72,7 +74,13 @@ class FileStorage {
               });
             }
           } catch (error) {
-            reject(new Error(`数据库升级失败: ${error instanceof Error ? error.message : String(error)}`));
+            reject(
+              new Error(
+                `数据库升级失败: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              )
+            );
           }
         };
 
@@ -84,10 +92,18 @@ class FileStorage {
 
         request.onerror = (e: Event) => {
           const dbError = (e.target as IDBOpenDBRequest).error;
-          reject(new Error(`数据库初始化失败: ${dbError?.message || '未知错误'}`));
+          reject(
+            new Error(`数据库初始化失败: ${dbError?.message || "未知错误"}`)
+          );
         };
       } catch (error) {
-        reject(new Error(`IndexedDB操作失败: ${error instanceof Error ? error.message : String(error)}`));
+        reject(
+          new Error(
+            `IndexedDB操作失败: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          )
+        );
       }
     });
   }
@@ -237,8 +253,113 @@ export function useFormPersistence<T extends object>(
     clearOnClose = false,
     dataExpiryMs = DEFAULT_DATA_EXPIRY_MS,
     errorLevel = DEFAULT_ERROR_LEVEL,
-    onError
+    onError,
+    transformMiddleware = {},
+    fieldTransforms = {},
   } = options;
+
+  // 存储中间件的响应式引用
+  const currentMiddleware = ref<DataTransformMiddleware>({
+    ...transformMiddleware,
+  });
+  // 存储字段级转换配置的响应式引用
+  const currentFieldTransforms = reactive<FieldTransformConfig>({
+    ...fieldTransforms,
+  });
+
+  // 应用保存前的数据转换
+  const applyBeforeSaveTransform = (data: any): any => {
+    let transformedData = { ...data };
+
+    // 先应用字段级别的转换
+    Object.keys(transformedData).forEach((field) => {
+      const fieldMiddleware = currentFieldTransforms[field];
+      if (fieldMiddleware && fieldMiddleware.beforeSave) {
+        try {
+          transformedData[field] = fieldMiddleware.beforeSave(
+            transformedData[field]
+          );
+        } catch (error) {
+          handleError(
+            error instanceof Error ? error : new Error(String(error)),
+            `字段[${field}]保存前转换失败`,
+            errorLevel,
+            onError
+          );
+        }
+      }
+    });
+
+    // 再应用全局中间件的转换
+    if (currentMiddleware.value.beforeSave) {
+      try {
+        transformedData = currentMiddleware.value.beforeSave(transformedData);
+      } catch (error) {
+        handleError(
+          error instanceof Error ? error : new Error(String(error)),
+          "全局保存前转换失败",
+          errorLevel,
+          onError
+        );
+      }
+    }
+
+    return transformedData;
+  };
+
+  // 应用恢复后的数据转换
+  const applyAfterRestoreTransform = (data: any): any => {
+    let transformedData = { ...data };
+
+    // 先应用全局中间件的转换
+    if (currentMiddleware.value.afterRestore) {
+      try {
+        transformedData = currentMiddleware.value.afterRestore(transformedData);
+      } catch (error) {
+        handleError(
+          error instanceof Error ? error : new Error(String(error)),
+          "全局恢复后转换失败",
+          errorLevel,
+          onError
+        );
+      }
+    }
+
+    // 再应用字段级别的转换
+    Object.keys(transformedData).forEach((field) => {
+      const fieldMiddleware = currentFieldTransforms[field];
+      if (fieldMiddleware && fieldMiddleware.afterRestore) {
+        try {
+          transformedData[field] = fieldMiddleware.afterRestore(
+            transformedData[field]
+          );
+        } catch (error) {
+          handleError(
+            error instanceof Error ? error : new Error(String(error)),
+            `字段[${field}]恢复后转换失败`,
+            errorLevel,
+            onError
+          );
+        }
+      }
+    });
+
+    return transformedData;
+  };
+
+  // 注册全局转换中间件
+  const registerTransformMiddleware = (
+    middleware: DataTransformMiddleware
+  ): void => {
+    currentMiddleware.value = { ...currentMiddleware.value, ...middleware };
+  };
+
+  // 注册字段级转换配置
+  const registerFieldTransforms = (
+    fieldTransforms: FieldTransformConfig
+  ): void => {
+    Object.assign(currentFieldTransforms, fieldTransforms);
+  };
 
   // 添加获取表单数据JSON的方法
   const getFormDataJson = (): string => {
@@ -252,20 +373,20 @@ export function useFormPersistence<T extends object>(
     // 转换文件数据，只保留需要的信息
     const simplifiedFileData: Record<string, any[]> = {};
 
-    Object.keys(fileDataCopy).forEach(fieldName => {
+    Object.keys(fileDataCopy).forEach((fieldName) => {
       // 确保fileDataCopy[fieldName]是数组，避免undefined.map()错误
       if (Array.isArray(fileDataCopy[fieldName])) {
-        simplifiedFileData[fieldName] = fileDataCopy[fieldName].map(file => ({
+        simplifiedFileData[fieldName] = fileDataCopy[fieldName].map((file) => ({
           fileName: file.fileName,
           fileSize: file.fileSize,
           fileType: file.fileType,
-          lastModified: file.lastModified
+          lastModified: file.lastModified,
         }));
       } else {
         // 如果不是数组，初始化为空数组
         simplifiedFileData[fieldName] = [];
       }
-      });
+    });
 
     return JSON.stringify(simplifiedFileData);
   };
@@ -303,7 +424,10 @@ export function useFormPersistence<T extends object>(
   };
 
   // 从sessionStorage恢复数据
-  const restoreFromSessionStorage = (): { formOnly: Partial<T>, success: boolean } => {
+  const restoreFromSessionStorage = (): {
+    formOnly: Partial<T>;
+    success: boolean;
+  } => {
     try {
       const savedText = sessionStorage.getItem(sessionKey);
       if (!savedText) {
@@ -321,7 +445,13 @@ export function useFormPersistence<T extends object>(
       // 移除savedAt字段，只恢复表单数据
       const formDataWithoutTimestamp = { ...parsed };
       delete formDataWithoutTimestamp.savedAt;
-      return { formOnly: formDataWithoutTimestamp as Partial<T>, success: true };
+
+      // 应用恢复后的数据转换
+      const transformedData = applyAfterRestoreTransform(
+        formDataWithoutTimestamp
+      );
+
+      return { formOnly: transformedData as Partial<T>, success: true };
     } catch (error) {
       handleError(
         error instanceof Error ? error : new Error(String(error)),
@@ -334,14 +464,19 @@ export function useFormPersistence<T extends object>(
   };
 
   // 从localStorage恢复数据（崩溃恢复）
-  const restoreFromLocalStorage = (): { formOnly: Partial<T>, success: boolean } => {
+  const restoreFromLocalStorage = (): {
+    formOnly: Partial<T>;
+    success: boolean;
+  } => {
     try {
       const localStorageText = localStorage.getItem(storageKey);
       if (!localStorageText) {
         return { formOnly: {}, success: false };
       }
 
-      const parsed = JSON.parse(localStorageText) as Partial<T> & { savedAt?: string };
+      const parsed = JSON.parse(localStorageText) as Partial<T> & {
+        savedAt?: string;
+      };
 
       // 检查数据是否过期
       if (isDataExpired(parsed.savedAt)) {
@@ -353,10 +488,15 @@ export function useFormPersistence<T extends object>(
       const formDataWithoutTimestamp = { ...parsed };
       delete formDataWithoutTimestamp.savedAt;
 
+      // 应用恢复后的数据转换
+      const transformedData = applyAfterRestoreTransform(
+        formDataWithoutTimestamp
+      );
+
       // 将恢复的数据同步到sessionStorage
       sessionStorage.setItem(sessionKey, localStorageText);
 
-      return { formOnly: formDataWithoutTimestamp as Partial<T>, success: true };
+      return { formOnly: transformedData as Partial<T>, success: true };
     } catch (error) {
       handleError(
         error instanceof Error ? error : new Error(String(error)),
@@ -392,14 +532,15 @@ export function useFormPersistence<T extends object>(
       // 检查sessionKey是否存在（判断是刷新还是重新打开）
       const sessionExists = sessionStorage.getItem(sessionKey) !== null;
       // 检查是否有正常关闭标记
-      const isNormalClose = localStorage.getItem(normalCloseKey) === 'true';
+      const isNormalClose = localStorage.getItem(normalCloseKey) === "true";
       // 检查localStorage中是否有数据
       const hasLocalStorageData = localStorage.getItem(storageKey) !== null;
 
       // 崩溃恢复逻辑：
       // 1. 如果session不存在但localStorage有数据，并且没有正常关闭标记，说明是崩溃场景
       // 2. 只有在崩溃场景下才从localStorage恢复数据
-      const isCrashRecovery = !sessionExists && hasLocalStorageData && !isNormalClose;
+      const isCrashRecovery =
+        !sessionExists && hasLocalStorageData && !isNormalClose;
 
       let formOnly: Partial<T> = {};
       let isFromLocalStorage = false;
@@ -460,8 +601,11 @@ export function useFormPersistence<T extends object>(
   // 保存文本数据 - 同时保存到localStorage和sessionStorage
   const saveTextData = (): void => {
     try {
+      // 应用保存前的数据转换
+      const transformedFormData = applyBeforeSaveTransform(formData);
+
       const dataWithTimestamp = {
-        ...formData,
+        ...transformedFormData,
         savedAt: new Date().toISOString(),
       };
       const dataString = JSON.stringify(dataWithTimestamp);
@@ -492,17 +636,23 @@ export function useFormPersistence<T extends object>(
       const transaction = fileStorage.getTransaction("readwrite");
       const store = transaction.objectStore(DB_STORE_NAME);
 
-      const deletePromises = oldFiles.map(oldFile =>
-        new Promise<void>((resolve, reject) => {
-          const request = store.delete(oldFile.fileId);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(new Error(`删除文件失败: ${oldFile.fileId}`));
-        })
+      const deletePromises = oldFiles.map(
+        (oldFile) =>
+          new Promise<void>((resolve, reject) => {
+            const request = store.delete(oldFile.fileId);
+            request.onsuccess = () => resolve();
+            request.onerror = () =>
+              reject(new Error(`删除文件失败: ${oldFile.fileId}`));
+          })
       );
 
       await Promise.all(deletePromises);
     } catch (error) {
-      throw new Error(`删除旧文件失败: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(
+        `删除旧文件失败: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
   };
 
@@ -526,7 +676,7 @@ export function useFormPersistence<T extends object>(
           fieldName,
           total: totalSize,
           loaded: currentLoaded,
-          percent
+          percent,
         };
       }
     );
@@ -562,7 +712,12 @@ export function useFormPersistence<T extends object>(
       let loadedSize = 0;
 
       for (const file of files) {
-        const savedFile = await saveSingleFile(file, fieldName, totalSize, loadedSize);
+        const savedFile = await saveSingleFile(
+          file,
+          fieldName,
+          totalSize,
+          loadedSize
+        );
         newFiles.push(savedFile);
         loadedSize += file.size;
       }
@@ -640,7 +795,6 @@ export function useFormPersistence<T extends object>(
       for (const field of fileFields) {
         fileData[field] = [];
       }
-
     } catch (err) {
       const errorMessage = handleError(
         err instanceof Error ? err : new Error(String(err)),
@@ -691,7 +845,7 @@ export function useFormPersistence<T extends object>(
       // 检查sessionKey是否存在（判断是刷新还是重新打开）
       const sessionExists = sessionStorage.getItem(sessionKey) !== null;
       // 检查是否有正常关闭标记
-      const isNormalClose = localStorage.getItem(normalCloseKey) === 'true';
+      const isNormalClose = localStorage.getItem(normalCloseKey) === "true";
 
       // 核心清理逻辑：
       // 1. 当clearOnClose=true且检测到正常关闭标记时，必须清空所有数据
@@ -749,6 +903,8 @@ export function useFormPersistence<T extends object>(
     restoreData,
     clearError,
     getFormDataJson,
-    getFileDataJson
+    getFileDataJson,
+    registerTransformMiddleware,
+    registerFieldTransforms,
   };
 }

@@ -1,9 +1,9 @@
 {
   "name": "@menglisuixin/form-persistence",
   "private": false,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
-  "description": "表单数据持久化库，支持正常/异常退出检测和文件上传进度监控",
+  "description": "表单数据持久化库，支持填写表单切换页面后数据持久化和恢复，支持异常退出后数据恢复",
   "keywords": [
     "form",
     "persistence",
@@ -13,7 +13,7 @@
     "form-save",
     "file-upload"
   ],
-  "author": "Your Name",
+  "author": "menglisuixin",
   "license": "MIT",
   "homepage": "https://github.com/menglisuixin/form-persistence",
   "repository": {
