@@ -11,11 +11,19 @@
     <!-- 上传进度条 -->
     <div v-if="uploadProgress" class="progress-container">
       <div class="progress-info">
-        <span>{{ uploadProgress.fieldName }}: {{ uploadProgress.percent }}%</span>
-        <span>{{ formatFileSize(uploadProgress.loaded) }} / {{ formatFileSize(uploadProgress.total) }}</span>
+        <span
+          >{{ uploadProgress.fieldName }}: {{ uploadProgress.percent }}%</span
+        >
+        <span
+          >{{ formatFileSize(uploadProgress.loaded) }} /
+          {{ formatFileSize(uploadProgress.total) }}</span
+        >
       </div>
       <div class="progress-bar">
-        <div class="progress-fill" :style="{ width: uploadProgress.percent + '%' }"></div>
+        <div
+          class="progress-fill"
+          :style="{ width: uploadProgress.percent + '%' }"
+        ></div>
       </div>
     </div>
 
@@ -49,11 +57,16 @@
         <input
           type="file"
           accept="image/*"
-          @change="handleFileChange('avatar', $event.target.files)"
+          @change="
+            handleFileChange(
+              'avatar',
+              ($event.target as HTMLInputElement).files
+            )
+          "
         />
         <div class="preview" v-if="fileData.avatar && fileData.avatar.length">
           <img
-            :src="getBlobUrl(fileData.avatar[0])"
+            :src="fileData.avatar[0] ? getBlobUrl(fileData.avatar[0]) : ''"
             alt="头像预览"
             class="avatar-preview"
           />
@@ -66,7 +79,12 @@
         <input
           type="file"
           multiple
-          @change="handleFileChange('attachments', $event.target.files)"
+          @change="
+            handleFileChange(
+              'attachments',
+              ($event.target as HTMLInputElement).files
+            )
+          "
         />
         <div
           class="file-list"
@@ -89,7 +107,12 @@
           type="file"
           webkitdirectory
           directory
-          @change="handleFileChange('folder', $event.target.files)"
+          @change="
+            handleFileChange(
+              'folder',
+              ($event.target as HTMLInputElement).files
+            )
+          "
         />
         <div class="file-list" v-if="fileData.folder && fileData.folder.length">
           <div
@@ -103,15 +126,17 @@
       </div>
 
       <button type="submit" class="submit-btn">提交表单</button>
-  <button type="button" @click="handleClearStorage" class="clear-btn">清除缓存数据</button>
+      <button type="button" @click="handleClearStorage" class="clear-btn">
+        清除缓存数据
+      </button>
     </form>
   </div>
 </template>
 
 <script setup lang="ts">
-import { useFormPersistence } from "@/hooks/useFormPersistence";
+import { useFormPersistence } from "../hooks/useFormPersistence";
 import { onUnmounted } from "vue";
-import { StoredFile } from "../types/useFormPersistenceType";
+import type { StoredFile } from "../types/useFormPersistenceType";
 
 // 定义表单数据类型
 interface FormData {
@@ -131,7 +156,17 @@ const handleFormError = (error: Error, context: string) => {
 };
 
 // 初始化表单（指定类型）
-const { formData, fileData, hasUnsavedChanges, uploadProgress, error, saveFiles, clearStorage, clearError, getFormDataJson, getFileDataJson } = useFormPersistence<FormData>(
+const {
+  formData,
+  fileData,
+  uploadProgress,
+  error,
+  saveFiles,
+  clearStorage,
+  clearError,
+  getFormDataJson,
+  getFileDataJson,
+} = useFormPersistence<FormData>(
   "example_form",
   {
     username: "",
@@ -142,8 +177,8 @@ const { formData, fileData, hasUnsavedChanges, uploadProgress, error, saveFiles,
     fileFields,
     clearOnClose: true, // 启用页面关闭时清除数据
     dataExpiryMs: 8 * 60 * 60 * 1000, // 自定义过期时间为8小时
-    errorLevel: 'detailed', // 详细错误报告
-    onError: handleFormError // 自定义错误处理回调
+    errorLevel: "detailed", // 详细错误报告
+    onError: handleFormError, // 自定义错误处理回调
   }
 );
 
@@ -162,13 +197,13 @@ const handleFileChange = async (fieldName: string, files: FileList | null) => {
 
 // 格式化文件大小为可读格式
 const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes';
+  if (bytes === 0) return "0 Bytes";
 
   const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+  const sizes = ["Bytes", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
 
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 };
 
 // 生成文件预览URL
@@ -196,22 +231,22 @@ const handleSubmit = () => {
   const fileJson = getFileDataJson();
 
   // 这里可以使用这些JSON数据进行后续处理
-  console.log('表单数据JSON:', formJson);
-  console.log('文件数据JSON:', fileJson);
+  console.log("表单数据JSON:", formJson);
+  console.log("文件数据JSON:", fileJson);
 
   // 模拟提交
-  alert('表单提交成功！\n\n表单数据JSON已获取，可用于后续处理。');
+  alert("表单提交成功！\n\n表单数据JSON已获取，可用于后续处理。");
 };
 
 // 清除缓存数据
 const handleClearStorage = async () => {
-  if (confirm('确定要清除所有缓存数据吗？此操作不可恢复。')) {
+  if (confirm("确定要清除所有缓存数据吗？此操作不可恢复。")) {
     try {
       await clearStorage();
-      alert('缓存数据已成功清除！');
+      alert("缓存数据已成功清除！");
     } catch (err) {
-      console.error('清除缓存失败:', err);
-      alert('清除缓存失败，请稍后重试。');
+      console.error("清除缓存失败:", err);
+      alert("清除缓存失败，请稍后重试。");
     }
   }
 };

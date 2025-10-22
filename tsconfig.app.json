@@ -3,6 +3,13 @@
   "compilerOptions": {
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
     "types": ["vite/client"],
+    "declaration": true,
+    "outDir": "./dist/types",
+    "emitDeclarationOnly": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
 
     /* Linting */
     "strict": true,

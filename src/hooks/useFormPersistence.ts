@@ -393,15 +393,18 @@ export function useFormPersistence<T extends object>(
       const sessionExists = sessionStorage.getItem(sessionKey) !== null;
       // 检查是否有正常关闭标记
       const isNormalClose = localStorage.getItem(normalCloseKey) === 'true';
-      // 检查是否是崩溃恢复场景
-      const isCrashRecovery = !sessionExists &&
-                             localStorage.getItem(storageKey) !== null &&
-                             !isNormalClose;
+      // 检查localStorage中是否有数据
+      const hasLocalStorageData = localStorage.getItem(storageKey) !== null;
+
+      // 崩溃恢复逻辑：
+      // 1. 如果session不存在但localStorage有数据，并且没有正常关闭标记，说明是崩溃场景
+      // 2. 只有在崩溃场景下才从localStorage恢复数据
+      const isCrashRecovery = !sessionExists && hasLocalStorageData && !isNormalClose;
 
       let formOnly: Partial<T> = {};
       let isFromLocalStorage = false;
 
-      // 优先从sessionStorage恢复
+      // 优先从sessionStorage恢复（适用于页面刷新场景）
       const sessionResult = restoreFromSessionStorage();
       if (sessionResult.success) {
         formOnly = sessionResult.formOnly;
@@ -462,11 +465,11 @@ export function useFormPersistence<T extends object>(
         savedAt: new Date().toISOString(),
       };
       const dataString = JSON.stringify(dataWithTimestamp);
-      
+
       // 先保存到sessionStorage，再保存到localStorage
       sessionStorage.setItem(sessionKey, dataString);
       localStorage.setItem(storageKey, dataString);
-      
+
       hasUnsavedChanges.value = true;
       error.value = null;
     } catch (err) {
@@ -488,15 +491,15 @@ export function useFormPersistence<T extends object>(
 
       const transaction = fileStorage.getTransaction("readwrite");
       const store = transaction.objectStore(DB_STORE_NAME);
-      
-      const deletePromises = oldFiles.map(oldFile => 
+
+      const deletePromises = oldFiles.map(oldFile =>
         new Promise<void>((resolve, reject) => {
           const request = store.delete(oldFile.fileId);
           request.onsuccess = () => resolve();
           request.onerror = () => reject(new Error(`删除文件失败: ${oldFile.fileId}`));
         })
       );
-      
+
       await Promise.all(deletePromises);
     } catch (error) {
       throw new Error(`删除旧文件失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -531,11 +534,11 @@ export function useFormPersistence<T extends object>(
     // 获取已保存的文件信息
     const savedFiles = await fileStorage.getFiles(formId, fieldName);
     const savedFile = savedFiles.find((f) => f.fileId === fileId);
-    
+
     if (!savedFile) {
       throw new Error(`无法找到刚保存的文件: ${fileId}`);
     }
-    
+
     return savedFile;
   };
 
@@ -601,8 +604,19 @@ export function useFormPersistence<T extends object>(
       handlePageLeave();
     }
 
-    // 设置正常关闭标记
-    localStorage.setItem(normalCloseKey, 'true');
+    // 只有在pagehide事件触发时才设置正常关闭标记
+    // 因为visibilitychange可能在切换标签页等场景下触发
+    if (document.visibilityState === "hidden") {
+      // 可以添加额外的检查来判断是否真正要关闭页面
+      // 这里使用sessionStorage作为临时存储，因为浏览器崩溃时sessionStorage会被清除
+      sessionStorage.setItem(normalCloseKey, "true");
+      // 然后复制到localStorage以便下次启动时检查
+      setTimeout(() => {
+        if (sessionStorage.getItem(normalCloseKey)) {
+          localStorage.setItem(normalCloseKey, "true");
+        }
+      }, 0);
+    }
   };
 
   // 清理存储
@@ -610,18 +624,18 @@ export function useFormPersistence<T extends object>(
     try {
       // 清除sessionStorage数据
       sessionStorage.removeItem(sessionKey);
-      
+
       // 清除localStorage数据
       localStorage.removeItem(storageKey);
       localStorage.removeItem(normalCloseKey);
-      
+
       // 清除IndexedDB数据
       await fileStorage.clearFiles(formId);
-      
+
       // 重置状态
       hasUnsavedChanges.value = false;
       error.value = null;
-      
+
       // 清空文件数据
       for (const field of fileFields) {
         fileData[field] = [];
@@ -676,19 +690,32 @@ export function useFormPersistence<T extends object>(
 
       // 检查sessionKey是否存在（判断是刷新还是重新打开）
       const sessionExists = sessionStorage.getItem(sessionKey) !== null;
-
       // 检查是否有正常关闭标记
       const isNormalClose = localStorage.getItem(normalCloseKey) === 'true';
 
-      // 智能清理逻辑：
-      // 1. 如果是正常关闭后重新打开且clearOnClose=true，清理所有数据
-      // 2. 崩溃恢复场景不清理数据
-      if (!sessionExists && isNormalClose) {
+      // 核心清理逻辑：
+      // 1. 当clearOnClose=true且检测到正常关闭标记时，必须清空所有数据
+      // 2. 无论是否有数据，都需要移除normal_close标记，为下次运行做准备
+      if (!sessionExists && isNormalClose && clearOnClose) {
+        // 先移除normal_close标记，避免多次触发清理
+        localStorage.removeItem(normalCloseKey);
+        // 执行清理操作，清空所有存储的数据
         await cleanNormalCloseData();
+      }
+      // 当检测到正常关闭标记但clearOnClose=false时，只移除标记，保留数据
+      else if (!sessionExists && isNormalClose) {
+        localStorage.removeItem(normalCloseKey);
       }
 
       // 恢复数据（包括文件）
+      // 注意：由于上面的清理逻辑，正常关闭且clearOnClose=true的情况下，此处不会有数据可恢复
       await restoreData();
+
+      // 在恢复完成后，如果没有session存在（表示不是刷新），确保移除normal_close标记
+      // 这是为了确保下次正常关闭时能正确标记
+      if (!sessionExists) {
+        localStorage.removeItem(normalCloseKey);
+      }
 
       // 添加事件监听
       document.addEventListener("visibilitychange", handlePageClose);

@@ -1,8 +1,41 @@
 {
-  "name": "form-persistence",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@menglisuixin/form-persistence",
+  "private": false,
+  "version": "1.0.0",
   "type": "module",
+  "description": "表单数据持久化库，支持正常/异常退出检测和文件上传进度监控",
+  "keywords": [
+    "form",
+    "persistence",
+    "localStorage",
+    "crash-recovery",
+    "vue",
+    "form-save",
+    "file-upload"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "homepage": "https://github.com/menglisuixin/form-persistence",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/menglisuixin/form-persistence.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/"
+  },
+  "main": "./dist/form-persistence.umd.cjs",
+  "module": "./dist/form-persistence.js",
+  "types": "./dist/types/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "import": "./dist/form-persistence.js",
+      "require": "./dist/form-persistence.umd.cjs",
+      "types": "./dist/types/index.d.ts"
+    }
+  },
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
