@@ -19,6 +19,8 @@ import {
 // 默认配置常量
 const DEFAULT_DATA_EXPIRY_MS = 24 * 60 * 60 * 1000; // 默认24小时过期
 const DEFAULT_ERROR_LEVEL: ErrorLevel = "basic"; // 默认基本错误级别
+const DEFAULT_AUTO_SAVE = true; // 默认启用自动保存
+const DEFAULT_AUTO_SAVE_INTERVAL = 300; // 默认自动保存间隔300ms
 
 // 存储常量
 const STORAGE_PREFIX = "form_persistence_";
@@ -256,6 +258,8 @@ export function useFormPersistence<T extends object>(
     onError,
     transformMiddleware = {},
     fieldTransforms = {},
+    autoSave = DEFAULT_AUTO_SAVE,
+    autoSaveInterval = DEFAULT_AUTO_SAVE_INTERVAL,
   } = options;
 
   // 存储中间件的响应式引用
@@ -773,16 +777,19 @@ export function useFormPersistence<T extends object>(
       throw err; // 重新抛出错误以便调用方可以捕获
     }
   };
-  // 页面离开处理 - 只负责保存数据，不清除数据
+  // 页面离开处理 - 根据autoSave配置决定是否保存数据
   const handlePageLeave = (): void => {
-    if (hasUnsavedChanges.value) {
+    // 只有在autoSave为true时才自动保存数据
+    if (autoSave && hasUnsavedChanges.value) {
       saveTextData();
     }
   };
 
   // beforeunload处理 - 显示确认提示
   const handleBeforeUnload = (e: BeforeUnloadEvent): void => {
-    if (hasUnsavedChanges.value && !clearOnClose) {
+    // 只有在autoSave为false且有未保存数据时，才显示确认提示
+    // 因为autoSave为true时数据会自动保存，不需要提示
+    if (!autoSave && hasUnsavedChanges.value && !clearOnClose) {
       e.preventDefault();
       // e.returnValue = "有未保存的数据，是否离开？";
     }
@@ -790,8 +797,8 @@ export function useFormPersistence<T extends object>(
 
   // 页面关闭时处理
   const handlePageClose = async (): Promise<void> => {
-    // 保存数据到sessionStorage和localStorage
-    if (hasUnsavedChanges.value) {
+    // 只有在autoSave为true时才自动保存数据
+    if (autoSave && hasUnsavedChanges.value) {
       handlePageLeave();
     }
 
@@ -842,8 +849,35 @@ export function useFormPersistence<T extends object>(
     }
   };
 
-  // 监听表单数据变化
-  watch(formData, () => saveTextData(), { deep: true });
+  // 创建防抖函数 - 现在基于自动保存间隔
+  let saveTimer: number | null = null;
+  const debouncedSave = () => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+    }
+
+    // 只有当autoSaveInterval不是false时才设置定时器
+    if (autoSaveInterval !== false) {
+      saveTimer = window.setTimeout(() => {
+        saveTextData();
+      }, autoSaveInterval);
+    }
+  };
+
+  // 监听表单数据变化 - 根据配置决定是否自动保存
+  // 只有当autoSave为true且autoSaveInterval不是false时才启用自动保存
+  if (autoSave && autoSaveInterval !== false) {
+    watch(formData, () => debouncedSave(), { deep: true });
+  }
+
+  // 移除了失去焦点时保存的功能
+
+  // 组件卸载时清理定时器
+  onUnmounted(() => {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+    }
+  });
 
   // 清理正常关闭数据
   const cleanNormalCloseData = async (): Promise<void> => {

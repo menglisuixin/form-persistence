@@ -72,4 +72,7 @@ export interface UseFormPersistenceOptions {
   transformMiddleware?: DataTransformMiddleware;
   // 字段级数据转换配置
   fieldTransforms?: FieldTransformConfig;
+  // 新增配置选项
+  autoSave?: boolean; // 是否自动保存，默认true
+  autoSaveInterval?: number | false; // 自动保存间隔时间（毫秒），默认300ms，设置为false则不启动自动保存
 }

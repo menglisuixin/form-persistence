@@ -1,7 +1,7 @@
 {
   "name": "@menglisuixin/form-persistence",
   "private": false,
-  "version": "1.0.2",
+  "version": "1.0.6",
   "type": "module",
   "description": "表单数据持久化库，支持填写表单切换页面后数据持久化和恢复，支持异常退出后数据恢复",
   "keywords": [
