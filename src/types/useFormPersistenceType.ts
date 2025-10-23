@@ -1,5 +1,11 @@
 import type { Reactive, Ref } from "vue";
 
+// 内部使用的标记接口，用于表示表单数据中可能包含的文件数据标记
+export interface FormDataWithFileMark {
+  // 内部标记，表示有文件数据存在，不可枚举
+  readonly __hasFileData?: boolean;
+}
+
 // 数据格式转换中间件类型
 export interface DataTransformMiddleware {
   // 在保存前转换数据
@@ -36,7 +42,7 @@ export interface UploadProgress {
 
 // 表单持久化Hook返回类型
 export interface UseFormPersistenceReturn<T> {
-  formData: Reactive<T>;
+  formData: Reactive<T & Partial<FormDataWithFileMark>>;
   fileData: Reactive<Record<string, StoredFile[]>>;
   hasUnsavedChanges: Ref<boolean>;
   uploadProgress: Ref<UploadProgress | null>;

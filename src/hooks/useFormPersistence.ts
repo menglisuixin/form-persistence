@@ -513,8 +513,20 @@ export function useFormPersistence<T extends object>(
     if (!shouldRestore) return;
 
     try {
-      for (const field of fileFields) {
-        fileData[field] = await fileStorage.getFiles(formId, field);
+      // 检查是否有崩溃恢复场景需要特殊处理
+      // 如果没有文本数据但可能有文件数据，仍尝试恢复文件
+      const hasPotentialFileData = true; // 始终尝试恢复，让IndexedDB查询结果决定
+
+      if (hasPotentialFileData) {
+        for (const field of fileFields) {
+          const files = await fileStorage.getFiles(formId, field);
+          fileData[field] = files;
+
+          // 如果恢复到了文件，标记有未保存的更改
+          if (files.length > 0) {
+            hasUnsavedChanges.value = true;
+          }
+        }
       }
     } catch (error) {
       handleError(
@@ -723,6 +735,30 @@ export function useFormPersistence<T extends object>(
       }
 
       fileData[fieldName] = newFiles;
+
+      // 关键点：确保即使只有文件数据，也更新 localStorage
+      // 创建一个临时对象，不修改原始的formData
+      const tempFormData = { ...formData };
+      // 添加一个内部标记字段，表示有文件数据存在
+      Object.defineProperty(tempFormData, '__hasFileData', {
+        value: true,
+        enumerable: false,
+        configurable: true
+      });
+
+      // 应用保存前的数据转换
+      const transformedFormData = applyBeforeSaveTransform(tempFormData);
+
+      const dataWithTimestamp = {
+        ...transformedFormData,
+        savedAt: new Date().toISOString(),
+      };
+      const dataString = JSON.stringify(dataWithTimestamp);
+
+      // 更新存储
+      sessionStorage.setItem(sessionKey, dataString);
+      localStorage.setItem(storageKey, dataString);
+
       hasUnsavedChanges.value = true;
       uploadProgress.value = null; // 上传完成，清除进度
     } catch (err) {
